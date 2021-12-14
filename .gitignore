@@ -1,0 +1,4 @@
+quiz-questions/
+
+__pycache__/
+.env
