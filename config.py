@@ -3,7 +3,7 @@ from environs import Env
 from quiz import get_questions
 
 env = Env()
-env.read_env('./.env')
+env.read_env()
 
 TG_TOKEN = env('TG_TOKEN')
 VK_TOKEN = env('VK_TOKEN')
