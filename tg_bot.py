@@ -4,12 +4,11 @@ import telegram
 import logging
 import random
 
-from config import QUESTIONS, TG_TOKEN
-from quiz import normalize_answer
-from db import redis_db
+from config import TG_TOKEN, QUIZ_FOLDER
+from quiz import normalize_answer, get_questions
+from db import connect_db
 
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -19,26 +18,26 @@ def start(bot, update):
     return NEW_QUESTION
 
 
-def handle_new_question_request(bot, update, user_data):
-    user = f'{update.effective_user.id}'
-    question = random.choice(list(QUESTIONS.keys()))
-    redis_db.hmset(user, {'question': question})
+def handle_new_question_request(bot, update):
+    user = update.effective_user.id
+    question, answer = random.choice(list(questions.items()))
+    redis_db.hmset(user, {'question': question, 'answer': answer})
     update.message.reply_text(question, reply_markup=REPLY_MARKUP)
     return ANSWER
 
 
-def handle_solution_attempt(bot, update, user_data):
-    user = f'{update.effective_user.id}'
+def handle_solution_attempt(bot, update):
+    user = update.effective_user.id
 
     if update.message.text == 'Мой счет':
-        handle_score(bot, update, user_data)
+        handle_score(bot, update)
         return ANSWER
 
-    question = redis_db.hget(user, 'question')
-    correct_answer = normalize_answer(QUESTIONS[question])
+    correct_answer = redis_db.hget(user, 'answer')
+    normalized_correct_answer = normalize_answer(correct_answer)
     user_answer = normalize_answer(update.message.text)
 
-    if user_answer == correct_answer:
+    if user_answer == normalized_correct_answer:
         score = redis_db.hget(user, 'score') or 0
         score = int(score) + 1
         redis_db.hmset(user, {'question': score})
@@ -56,10 +55,9 @@ def handle_solution_attempt(bot, update, user_data):
     return ANSWER
 
 
-def handle_give_up(bot, update, user_data):
-    user = f'{update.effective_user.id}'
-    question = redis_db.hget(user, 'question')
-    correct_answer = QUESTIONS.get(question)
+def handle_give_up(bot, update):
+    user = update.effective_user.id
+    correct_answer = redis_db.hget(user, 'answer')
     message = f'Правильный ответ:\n{correct_answer}'
 
     update.message.reply_text(
@@ -69,15 +67,16 @@ def handle_give_up(bot, update, user_data):
     return NEW_QUESTION
 
 
-def handle_score(bot, update, user_data):
-    user = f'{update.effective_user.id}'
+def handle_score(bot, update):
+    user = update.effective_user.id
     score = redis_db.hget(user, 'score') or 0
     update.message.reply_text(
-        f'Твой счет: {score}'
+        f'Твой счет: {score}',
+        reply_markup=REPLY_MARKUP
     )
 
 
-def cancel(bot, update, user_data):
+def cancel(bot, update):
     update.message.reply_text('Будем вас ждать!', reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
@@ -86,39 +85,45 @@ def error(bot, update, error):
     logger.warning(f'Update {update} caused error {error}')
 
 
-def main():
-    updater = Updater(TG_TOKEN)
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
 
+    REPLY_MARKUP = telegram.ReplyKeyboardMarkup([['Новый вопрос', 'Сдаться'], ['Мой счет']])
+    NEW_QUESTION, ANSWER, GIVE_UP = range(3)
+    questions = get_questions(QUIZ_FOLDER)
+    redis_db = connect_db()
+
+    updater = Updater(TG_TOKEN)
     dp = updater.dispatcher
 
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler('start', start),
-            RegexHandler('^(Новый вопрос)$', handle_new_question_request, pass_user_data=True)
+            RegexHandler('^(Новый вопрос)$', handle_new_question_request)
         ],
         states={
-                NEW_QUESTION: [
-                    RegexHandler(
-                        '^(Новый вопрос)$', handle_new_question_request, pass_user_data=True
-                    ),
-                ],
-                ANSWER: [
-                    RegexHandler(
-                        '^(Сдаться)$', handle_give_up, pass_user_data=True
-                    ),
-                    MessageHandler(
-                        Filters.text, handle_solution_attempt, pass_user_data=True
-                    )
-                ],
-                GIVE_UP: [
-                    RegexHandler(
-                        '^(Сдаться)$', handle_give_up, pass_user_data=True
-                    ),
-                ]
+            NEW_QUESTION: [
+                RegexHandler(
+                    '^(Новый вопрос)$', handle_new_question_request
+                ),
+            ],
+            ANSWER: [
+                RegexHandler(
+                    '^(Сдаться)$', handle_give_up
+                ),
+                MessageHandler(
+                    Filters.text, handle_solution_attempt
+                )
+            ],
+            GIVE_UP: [
+                RegexHandler(
+                    '^(Сдаться)$', handle_give_up
+                ),
+            ]
 
-            },
+        },
         fallbacks=[
-            CommandHandler('finish', cancel, pass_user_data=True),
+            CommandHandler('finish', cancel),
         ]
     )
 
@@ -129,9 +134,3 @@ def main():
     updater.start_polling()
 
     updater.idle()
-
-
-if __name__ == '__main__':
-    REPLY_MARKUP = telegram.ReplyKeyboardMarkup([['Новый вопрос', 'Сдаться'], ['Мой счет']])
-    NEW_QUESTION, ANSWER, GIVE_UP = range(3)
-    main()

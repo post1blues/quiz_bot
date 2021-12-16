@@ -12,6 +12,5 @@ def connect_db():
     return db
 
 
-redis_db = connect_db()
 
 

@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from environs import Env
 
 
 logger = logging.getLogger(__name__)
@@ -23,7 +22,7 @@ def get_quiz_files(folder):
     return quiz_files
 
 
-def read_questions_file(filename):
+def parse_question_answer_file(filename):
     questions = dict()
     with open(filename, 'r', encoding='KOI8-R') as file:
         questions_content = file.read().split('\n\n')
@@ -44,7 +43,7 @@ def get_questions(folder):
     files = get_quiz_files(folder)
     questions = dict()
     for file in files:
-        file_questions = read_questions_file(file)
+        file_questions = parse_question_answer_file(file)
         questions.update(file_questions)
     logger.info('Finished reading files with questions')
     return questions

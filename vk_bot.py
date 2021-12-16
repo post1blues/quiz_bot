@@ -5,12 +5,11 @@ from vk_api.longpoll import VkLongPoll, VkEventType
 from vk_api.utils import get_random_id
 import random
 
-from config import QUESTIONS, VK_TOKEN
-from quiz import normalize_answer
-from db import redis_db
+from config import VK_TOKEN, QUIZ_FOLDER
+from quiz import normalize_answer, get_questions
+from db import connect_db
 
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -38,14 +37,13 @@ def handle_start(vk_api, user, keyboard):
 
 
 def handle_new_question_request(vk_api, user, keyboard):
-    question = random.choice(list(QUESTIONS.keys()))
-    redis_db.hmset(user, {'question': question})
+    question, answer = random.choice(list(questions.items()))
+    redis_db.hmset(user, {'question': question, 'answer': answer})
     send_message(vk_api, user, keyboard, question)
 
 
 def handle_give_up(vk_api, user, keyboard):
-    question = redis_db.hget(user, 'question')
-    answer = QUESTIONS[question]
+    answer = redis_db.hget(user, 'answer')
     message = f'Правильный ответ:\n{answer}'
     send_message(vk_api, user, keyboard, message)
     handle_new_question_request(vk_api, user, keyboard)
@@ -58,27 +56,31 @@ def handle_score(vk_api, user, keyboard):
 
 
 def handle_solution_attempt(vk_api, user, keyboard, text):
-    question = redis_db.hget(user, 'question')
-    score = redis_db.hget(user, 'score') or 0
+    correct_answer = redis_db.hget(user, 'answer')
 
-    if question:
+    if correct_answer:
         user_answer = normalize_answer(text)
-        correct_answer = normalize_answer(QUESTIONS[question])
+        normalized_correct_answer = normalize_answer(correct_answer)
 
-        if user_answer == correct_answer:
+        if user_answer == normalized_correct_answer:
+            score = redis_db.hget(user, 'score') or 0
             score = int(score) + 1
             send_message(vk_api, user, keyboard, 'Правильный ответ!')
+            redis_db.hmset(user, {'score': score})
             handle_new_question_request(vk_api, user, keyboard)
         else:
             send_message(vk_api, user, keyboard, 'Неверно! Попробуйте еще раз')
-
-        redis_db.hmset(user, {'score': score})
 
     else:
         send_message(vk_api, user, keyboard, 'Нажмите "Новый вопрос"')
 
 
-def main():
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+
+    redis_db = connect_db()
+    questions = get_questions(QUIZ_FOLDER)
+
     vk_session = vk.VkApi(token=VK_TOKEN)
     vk_api = vk_session.get_api()
 
@@ -100,7 +102,3 @@ def main():
                 handle_score(vk_api, user, keyboard)
             else:
                 handle_solution_attempt(vk_api, user, keyboard, event.text)
-
-
-if __name__ == "__main__":
-    main()
