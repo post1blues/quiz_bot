@@ -3,6 +3,7 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, Conve
 import telegram
 import logging
 import random
+from functools import partial
 
 from config import TG_TOKEN, QUIZ_FOLDER
 from quiz import normalize_answer, get_questions
@@ -11,6 +12,9 @@ from db import connect_db
 
 logger = logging.getLogger(__name__)
 
+REPLY_MARKUP = telegram.ReplyKeyboardMarkup([['Новый вопрос', 'Сдаться'], ['Мой счет']])
+NEW_QUESTION, ANSWER, GIVE_UP = range(3)
+
 
 def start(bot, update):
     welcome_msg = 'Приветствуем в нашей викторине! Нажми кнопку "Новый вопрос"'
@@ -18,29 +22,29 @@ def start(bot, update):
     return NEW_QUESTION
 
 
-def handle_new_question_request(bot, update):
+def handle_new_question_request(bot, update, db, questions):
     user = update.effective_user.id
     question, answer = random.choice(list(questions.items()))
-    redis_db.hmset(user, {'question': question, 'answer': answer})
+    db.hmset(user, {'question': question, 'answer': answer})
     update.message.reply_text(question, reply_markup=REPLY_MARKUP)
     return ANSWER
 
 
-def handle_solution_attempt(bot, update):
+def handle_solution_attempt(bot, update, db):
     user = update.effective_user.id
 
     if update.message.text == 'Мой счет':
-        handle_score(bot, update)
+        handle_score(bot, update, db)
         return ANSWER
 
-    correct_answer = redis_db.hget(user, 'answer')
+    correct_answer = db.hget(user, 'answer')
     normalized_correct_answer = normalize_answer(correct_answer)
     user_answer = normalize_answer(update.message.text)
 
     if user_answer == normalized_correct_answer:
-        score = redis_db.hget(user, 'score') or 0
+        score = db.hget(user, 'score') or 0
         score = int(score) + 1
-        redis_db.hmset(user, {'question': score})
+        db.hmset(user, {'question': score})
 
         update.message.reply_text(
             'Поздравляю! Для следующего вопроса нажми «Новый вопрос»',
@@ -55,9 +59,9 @@ def handle_solution_attempt(bot, update):
     return ANSWER
 
 
-def handle_give_up(bot, update):
+def handle_give_up(bot, update, db):
     user = update.effective_user.id
-    correct_answer = redis_db.hget(user, 'answer')
+    correct_answer = db.hget(user, 'answer')
     message = f'Правильный ответ:\n{correct_answer}'
 
     update.message.reply_text(
@@ -67,9 +71,9 @@ def handle_give_up(bot, update):
     return NEW_QUESTION
 
 
-def handle_score(bot, update):
+def handle_score(bot, update, db):
     user = update.effective_user.id
-    score = redis_db.hget(user, 'score') or 0
+    score = db.hget(user, 'score') or 0
     update.message.reply_text(
         f'Твой счет: {score}',
         reply_markup=REPLY_MARKUP
@@ -88,9 +92,7 @@ def error(bot, update, error):
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
-    REPLY_MARKUP = telegram.ReplyKeyboardMarkup([['Новый вопрос', 'Сдаться'], ['Мой счет']])
-    NEW_QUESTION, ANSWER, GIVE_UP = range(3)
-    questions = get_questions(QUIZ_FOLDER)
+    parsed_questions = get_questions(QUIZ_FOLDER)
     redis_db = connect_db()
 
     updater = Updater(TG_TOKEN)
@@ -99,25 +101,27 @@ if __name__ == '__main__':
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler('start', start),
-            RegexHandler('^(Новый вопрос)$', handle_new_question_request)
+            RegexHandler(
+                '^(Новый вопрос)$',
+                partial(handle_new_question_request, db=redis_db, questions=parsed_questions))
         ],
         states={
             NEW_QUESTION: [
                 RegexHandler(
-                    '^(Новый вопрос)$', handle_new_question_request
+                    '^(Новый вопрос)$',  partial(handle_new_question_request, db=redis_db, questions=parsed_questions)
                 ),
             ],
             ANSWER: [
                 RegexHandler(
-                    '^(Сдаться)$', handle_give_up
+                    '^(Сдаться)$', partial(handle_give_up, db=redis_db)
                 ),
                 MessageHandler(
-                    Filters.text, handle_solution_attempt
+                    Filters.text, partial(handle_solution_attempt, db=redis_db)
                 )
             ],
             GIVE_UP: [
                 RegexHandler(
-                    '^(Сдаться)$', handle_give_up
+                    '^(Сдаться)$', partial(handle_new_question_request, db=redis_db)
                 ),
             ]
 
